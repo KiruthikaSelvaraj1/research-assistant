@@ -74,8 +74,8 @@ def get_llm() -> LLM:
     # ── 2. Groq (FREE) ── 12k TPM (70B) / 6k TPM (8B), rate-limit prone ────
     groq_key = os.getenv("GROQ_API_KEY")
     if groq_key:
-        # 70B has higher TPM limit (12k vs 6k for 8B) on free tier
-        model = os.getenv("LLM_MODEL", "groq/llama-3.3-70b-versatile")
+        # Keep the default on a model currently available to this provider.
+        model = os.getenv("LLM_MODEL", "groq/qwen/qwen3.8-27b")
         print(f"[LLM] Using Groq (FREE): {model}")
         return LLM(model=model, api_key=groq_key, temperature=0.3, max_tokens=400, num_retries=24)
 
