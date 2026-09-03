@@ -11,6 +11,7 @@ Endpoints:
 from __future__ import annotations
 
 import shutil
+import threading
 import uuid
 from pathlib import Path
 
@@ -18,6 +19,18 @@ from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+
+# CrewAI 1.15 annotates threading.Lock as a type. Python 3.11 exposes it as
+# a factory function, so provide a callable type-compatible adapter at import time.
+_thread_lock_factory = threading.Lock
+
+
+class _CompatibleLock:
+    def __new__(cls):
+        return _thread_lock_factory()
+
+
+threading.Lock = _CompatibleLock
 
 from backend.crew import ResearchCrew
 from backend.models import AnalyzeRequest, AnalyzeResponse, UploadResponse

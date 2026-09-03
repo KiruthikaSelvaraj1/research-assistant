@@ -19,7 +19,6 @@ import re
 import time
 from typing import Optional
 
-import litellm
 from crewai import Agent, Crew, LLM, Process, Task
 from dotenv import load_dotenv
 
@@ -32,34 +31,53 @@ from backend.agents.synthesis_agent import create_synthesis_agent
 load_dotenv()
 
 # ---------------------------------------------------------------------------
-# litellm global settings — auto-retry on Groq/any rate-limit errors
-# When Groq says "try again in 31s", litellm waits and retries automatically.
+# Patch CrewAI's cache_breakpoint marker to a no-op
+#
+# CrewAI 1.15+ unconditionally adds {"cache_breakpoint": True} to system
+# messages for Anthropic prompt caching (crewai.llms.cache.mark_cache_breakpoint).
+# When using non-Anthropic providers (Groq, Gemini, Ollama), litellm does NOT
+# strip this key and the provider rejects it as an unsupported field.
+#
+# Fix: neuter the marker at the source so it never reaches litellm.
 # ---------------------------------------------------------------------------
-litellm.num_retries = 12
-litellm.request_timeout = 300  # 5-minute timeout per request
-os.environ.setdefault("LITELLM_LOG", "ERROR")  # suppress verbose litellm logs
+try:
+    import crewai.llms.cache as _crew_cache
+except ModuleNotFoundError:
+    _crew_cache = None
 
+if _crew_cache is not None:
+    def _noop_mark(message: dict) -> dict:
+        return message
+
+    def _noop_strip(message: dict) -> None:
+        pass
+
+    _crew_cache.mark_cache_breakpoint = _noop_mark
+    _crew_cache.strip_cache_breakpoint = _noop_strip
+    print("[PATCH] crewai: cache_breakpoint marker neutered for non-Anthropic providers")
 
 # ---------------------------------------------------------------------------
 # LLM factory — supports multiple FREE and paid providers
-# Priority: Groq → Gemini → Ollama (local) → Anthropic (paid)
+# Priority: Gemini → Groq → Ollama (local) → Anthropic (paid)
 # Set the matching API key in your .env file to activate a provider.
+# Gemini has by far the best free tier (1M TPM vs Groq's 12k).
 # ---------------------------------------------------------------------------
 
 def get_llm() -> LLM:
-    # ── 1. Groq (FREE) ── fastest, best free option ─────────────────────────
-    groq_key = os.getenv("GROQ_API_KEY")
-    if groq_key:
-        model = os.getenv("LLM_MODEL", "groq/llama-3.3-70b-versatile")
-        print(f"[LLM] Using Groq (FREE): {model}")
-        return LLM(model=model, api_key=groq_key, temperature=0.3, max_tokens=800, num_retries=12)
-
-    # ── 2. Google Gemini (FREE) ──────────────────────────────────────────────
+    # ── 1. Google Gemini (FREE) ── 1 000 000 TPM, best free tier ────────────
     gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
     if gemini_key:
-        model = os.getenv("LLM_MODEL", "gemini/gemini-1.5-flash")
+        model = os.getenv("LLM_MODEL", "gemini/gemini-2.0-flash")
         print(f"[LLM] Using Google Gemini (FREE): {model}")
-        return LLM(model=model, api_key=gemini_key, temperature=0.3, max_tokens=2048, num_retries=5)
+        return LLM(model=model, api_key=gemini_key, temperature=0.3, max_tokens=4096, num_retries=8)
+
+    # ── 2. Groq (FREE) ── 12k TPM (70B) / 6k TPM (8B), rate-limit prone ────
+    groq_key = os.getenv("GROQ_API_KEY")
+    if groq_key:
+        # 70B has higher TPM limit (12k vs 6k for 8B) on free tier
+        model = os.getenv("LLM_MODEL", "groq/llama-3.3-70b-versatile")
+        print(f"[LLM] Using Groq (FREE): {model}")
+        return LLM(model=model, api_key=groq_key, temperature=0.3, max_tokens=400, num_retries=24)
 
     # ── 3. Ollama (LOCAL — completely free, no internet needed) ─────────────
     ollama_model = os.getenv("OLLAMA_MODEL")
@@ -411,12 +429,12 @@ class ResearchCrew:
 
         self._progress(5, "Future Directions Agent", "running", "Identifying research gaps…")
 
-        # step_callback: pause between each agent step so Groq's 12k TPM
-        # limit never fills up in a single minute window.
+        # step_callback: minimal pause between steps for Gemini (60 RPM, 1M TPM
+        # free tier) — no significant rate-limiting needed.
         _step_count = [0]
         def _pace_step(step_output):
             _step_count[0] += 1
-            wait = 35  # seconds — conservative for 12k TPM free tier
+            wait = 2  # seconds — Gemini free tier handles 60 RPM, just a small buffer
             print(f"[Rate-limit guard] Step {_step_count[0]} done. Waiting {wait}s before next step…")
             time.sleep(wait)
 
