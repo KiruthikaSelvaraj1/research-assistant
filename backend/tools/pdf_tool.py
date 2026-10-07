@@ -37,32 +37,31 @@ class PDFExtractionTool(BaseTool):
     # Public interface (BaseTool calls _run)
     # ------------------------------------------------------------------
 
+    def extract_paper(self, pdf_path: str) -> dict:
+        """Extract bounded text and section metadata without an LLM tool call."""
+        text = self._extract_text(pdf_path)
+        if not text.strip():
+            raise ValueError(
+                f"No text could be extracted from {os.path.basename(pdf_path)} "
+                "(the PDF may be scanned or image-only)."
+            )
+
+        sections = self._detect_sections(text)
+        return {
+            "filename": os.path.basename(pdf_path),
+            # Bound source text passed into the analysis pipeline.
+            "full_text": text[:5_000],
+            "sections": sections,
+            "metadata": {
+                "char_count": len(text),
+                "word_count": len(text.split()),
+                "sections_detected": list(sections.keys()),
+            },
+        }
+
     def _run(self, pdf_path: str) -> str:  # noqa: D401
         try:
-            text = self._extract_text(pdf_path)
-            if not text.strip():
-                return json.dumps({
-                    "error": "No text could be extracted from this PDF (may be scanned/image-only).",
-                    "filename": os.path.basename(pdf_path),
-                    "full_text": "",
-                    "sections": {},
-                    "metadata": {},
-                })
-
-            sections = self._detect_sections(text)
-            result = {
-                "filename": os.path.basename(pdf_path),
-                # Groq free tier: 12k tokens/min → cap text to ~1200 tokens
-                "full_text": text[:5_000],
-                "sections": sections,
-                "metadata": {
-                    "char_count": len(text),
-                    "word_count": len(text.split()),
-                    "sections_detected": list(sections.keys()),
-                },
-            }
-            return json.dumps(result, ensure_ascii=False)
-
+            return json.dumps(self.extract_paper(pdf_path), ensure_ascii=False)
         except Exception as exc:  # noqa: BLE001
             return json.dumps({
                 "error": str(exc),

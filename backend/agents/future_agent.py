@@ -1,8 +1,4 @@
-"""
-Agent 5 — Research Futurist & Gap Analyst
-Reads the synthesised literature review and all extracted findings to suggest
-3-5 concrete, evidence-grounded future research directions.
-"""
+"""Proposes evidence-grounded future research studies from the analysis."""
 from crewai import Agent, LLM
 
 
@@ -30,7 +26,7 @@ def create_future_agent(llm: LLM) -> Agent:
             "pursued with current or near-future technology and methods."
         ),
         llm=llm,
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
-        max_iter=2,
+        max_iter=1,
     )

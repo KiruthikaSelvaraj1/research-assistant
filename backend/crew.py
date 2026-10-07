@@ -1,13 +1,8 @@
 """
 crew.py — ResearchCrew
 
-Assembles the 5 CrewAI agents into a sequential crew and orchestrates their
-tasks dynamically based on the number of uploaded papers (1-3).
-
-Task ordering per paper:
-  Ingest → Summarise → Extract Findings
-Then, once all papers are processed:
-  Synthesise (cross-paper) → Future Directions
+Extracts PDF text locally, then runs one analysis task per paper followed by
+comparative synthesis and future directions.
 
 After kickoff, outputs are parsed and returned as a structured dict.
 """
@@ -22,11 +17,10 @@ from typing import Optional
 from crewai import Agent, Crew, LLM, Process, Task
 from dotenv import load_dotenv
 
-from backend.agents.findings_agent import create_findings_agent
 from backend.agents.future_agent import create_future_agent
-from backend.agents.ingestion_agent import create_ingestion_agent
 from backend.agents.summarizer_agent import create_summarizer_agent
 from backend.agents.synthesis_agent import create_synthesis_agent
+from backend.tools.pdf_tool import PDFExtractionTool
 
 load_dotenv()
 
@@ -60,24 +54,37 @@ if _crew_cache is not None:
 # LLM factory — supports multiple FREE and paid providers
 # Priority: Gemini → Groq → Ollama (local) → Anthropic (paid)
 # Set the matching API key in your .env file to activate a provider.
-# Gemini has by far the best free tier (1M TPM vs Groq's 12k).
+# Gemini's free tier has substantially more throughput than Groq's rate-limited tier.
 # ---------------------------------------------------------------------------
 
 def get_llm() -> LLM:
-    # ── 1. Google Gemini (FREE) ── 1 000 000 TPM, best free tier ────────────
-    gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-    if gemini_key:
-        model = os.getenv("LLM_MODEL", "gemini/gemini-2.0-flash")
-        print(f"[LLM] Using Google Gemini (FREE): {model}")
-        return LLM(model=model, api_key=gemini_key, temperature=0.3, max_tokens=4096, num_retries=8)
-
-    # ── 2. Groq (FREE) ── 12k TPM (70B) / 6k TPM (8B), rate-limit prone ────
+    requested_model = os.getenv("LLM_MODEL", "")
     groq_key = os.getenv("GROQ_API_KEY")
-    if groq_key:
-        # Keep the default on a model currently available to this provider.
-        model = os.getenv("LLM_MODEL", "groq/qwen/qwen3.8-27b")
-        print(f"[LLM] Using Groq (FREE): {model}")
-        return LLM(model=model, api_key=groq_key, temperature=0.3, max_tokens=400, num_retries=24)
+    gemini_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+
+    if requested_model.startswith("ollama/"):
+        print(f"[LLM] Using Ollama (LOCAL/FREE): {requested_model}")
+        return LLM(model=requested_model, temperature=0.3, max_tokens=1536)
+
+    # Respect an explicit Groq model choice; otherwise prefer Gemini when both
+    # credentials are present to avoid Groq's comparatively tight output quota.
+    use_groq_first = requested_model.startswith("groq/")
+    providers = (
+        ("groq", groq_key, "groq/qwen/qwen3.8-27b"),
+        ("gemini", gemini_key, "gemini/gemini-3.8-flash"),
+    )
+    if not use_groq_first:
+        providers = tuple(reversed(providers))
+
+    for provider, api_key, default_model in providers:
+        if not api_key:
+            continue
+        model = requested_model if requested_model.startswith(f"{provider}/") else default_model
+        if provider == "groq":
+            print(f"[LLM] Using Groq (FREE; rate limits may apply): {model}")
+            return LLM(model=model, api_key=api_key, temperature=0.3, max_tokens=900, num_retries=24)
+        print(f"[LLM] Using Google Gemini (FREE): {model}")
+        return LLM(model=model, api_key=api_key, temperature=0.3, max_tokens=4096, num_retries=8)
 
     # ── 3. Ollama (LOCAL — completely free, no internet needed) ─────────────
     ollama_model = os.getenv("OLLAMA_MODEL")
@@ -108,35 +115,50 @@ def get_llm() -> LLM:
 # Output parsers
 # ---------------------------------------------------------------------------
 
-def _parse_findings(raw: str) -> list[dict]:
-    """Extract a JSON array of findings from the agent's raw output."""
-    # Prefer fenced JSON block
-    m = re.search(r"```json\s*(.*?)```", raw, re.DOTALL)
-    if m:
-        try:
-            return json.loads(m.group(1))
-        except json.JSONDecodeError:
-            pass
+def _parse_paper_analysis(raw: str, paper_num: int) -> tuple[str, list[dict]]:
+    """Parse the combined summary/findings response and reject malformed output."""
+    fenced = re.search(r"```(?:json)?\s*(.*?)```", raw, re.DOTALL | re.IGNORECASE)
+    candidates = [fenced.group(1).strip()] if fenced else [raw.strip()]
+    if not fenced:
+        object_start = raw.find("{")
+        object_end = raw.rfind("}")
+        if object_start >= 0 and object_end > object_start:
+            candidates.append(raw[object_start:object_end + 1])
 
-    # Fallback: first JSON array in the text
-    m2 = re.search(r"\[.*\]", raw, re.DOTALL)
-    if m2:
+    parsed = None
+    for candidate in candidates:
         try:
-            return json.loads(m2.group(0))
+            parsed = json.loads(candidate)
+            break
         except json.JSONDecodeError:
-            pass
+            continue
 
-    # Final fallback: wrap raw text
-    return [
-        {
-            "finding_id": "F1",
-            "claim": "Could not parse structured findings — see raw output.",
-            "methodology": "",
-            "results": raw[:500],
-            "limitations": "",
-            "significance": "",
-        }
-    ]
+    if not isinstance(parsed, dict):
+        raise ValueError(
+            f"Could not parse Paper {paper_num} analysis as JSON. "
+            "Please retry the analysis."
+        )
+
+    summary = parsed.get("summary")
+    findings = parsed.get("findings")
+    if not isinstance(summary, str) or not summary.strip():
+        raise ValueError(f"Paper {paper_num} analysis did not include a summary.")
+    if not isinstance(findings, list) or not findings:
+        raise ValueError(f"Paper {paper_num} analysis did not include key findings.")
+
+    required_fields = {
+        "finding_id", "claim", "methodology", "results", "limitations", "significance"
+    }
+    if any(
+        not isinstance(finding, dict) or not required_fields.issubset(finding)
+        for finding in findings
+    ):
+        raise ValueError(
+            f"Paper {paper_num} findings are missing required fields. "
+            "Please retry the analysis."
+        )
+
+    return summary.strip(), findings
 
 
 def _parse_synthesis(raw: str) -> tuple[str, dict]:
@@ -214,111 +236,62 @@ class ResearchCrew:
     # Task builders
     # ------------------------------------------------------------------
 
-    def _build_ingest_task(self, agent: Agent, paper_num: int, pdf_path: str) -> Task:
-        filename = os.path.basename(pdf_path)
-        return Task(
-            description=(
-                f"Use the extract_pdf_text tool to extract content from Paper {paper_num} "
-                f"located at: {pdf_path}\n\n"
-                f"After extraction, analyse the result and report:\n"
-                f"1. The paper's title and authors (typically in the first few lines).\n"
-                f"2. Which sections were successfully detected.\n"
-                f"3. The research domain and main topic.\n"
-                f"4. Any extraction issues (e.g. scanned pages, missing sections).\n\n"
-                f"Return the FULL extraction result — include the complete section texts so "
-                f"that downstream agents have everything they need."
-            ),
-            expected_output=(
-                f"Complete extraction of Paper {paper_num} ({filename}) including detected "
-                f"sections (abstract, methods, results, conclusion), paper title/authors "
-                f"if detectable, and the full extracted text."
-            ),
-            agent=agent,
-        )
-
-    def _build_summary_task(
-        self, agent: Agent, paper_num: int, ingest_task: Task
+    def _build_paper_analysis_task(
+        self, agent: Agent, paper_num: int, paper_data: dict
     ) -> Task:
         return Task(
             description=(
-                f"Based on the extracted content of Paper {paper_num} (provided by the "
-                f"Ingestion Agent in context), write a concise, accurate academic summary.\n\n"
-                f"Requirements:\n"
-                f"• Length: exactly 150-250 words — count carefully.\n"
-                f"• First sentence: state the paper's core research question or objective.\n"
-                f"• Cover: methodology used (data, approach, experimental setup).\n"
-                f"• Cover: main findings and their magnitude — include specific numbers.\n"
-                f"• Cover: key limitations acknowledged by the authors.\n"
-                f"• Final sentence: broader contribution to the field.\n\n"
-                f"Style: clear academic prose, no bullet points, no 'This paper ...' opener, "
-                f"no hedging phrases like 'appears to' or 'seems to'."
+                f"Analyze Paper {paper_num} using only the extracted source below. "
+                f"Return one JSON object with exactly two top-level keys: `summary` and "
+                f"`findings`. The summary must be 150-200 words and cover objective, "
+                f"method/data, main results with exact reported numbers, limitations, "
+                f"and contribution. `findings` must contain exactly the 3 most important "
+                f"distinct findings. Each finding must contain `finding_id` (F{paper_num}_1 "
+                f"through F{paper_num}_3), `claim`, `methodology`, `results`, `limitations`, "
+                f"and `significance`. Keep each field concise but specific. Do not invent "
+                f"numbers or limitations; write 'not reported in the supplied text' when "
+                f"evidence is unavailable. Return valid JSON only, without markdown.\n\n"
+                f"Source extraction:\n{json.dumps(paper_data, ensure_ascii=False)}"
             ),
             expected_output=(
-                f"A 150-250 word academic summary of Paper {paper_num} covering: "
-                f"research objective, methodology, key findings with specific metrics, "
-                f"limitations, and broader significance."
+                "Valid JSON with a 150-200 word summary and exactly three evidence-grounded "
+                "key findings, each with the required structured fields."
             ),
             agent=agent,
-            context=[ingest_task],
-        )
-
-    def _build_findings_task(
-        self, agent: Agent, paper_num: int, ingest_task: Task
-    ) -> Task:
-        return Task(
-            description=(
-                f"Based on the extracted content of Paper {paper_num} (from the Ingestion "
-                f"Agent in context), extract the key findings as a structured JSON list.\n\n"
-                f"Return ONLY a JSON array — no prose before or after — in this exact schema:\n"
-                f"```json\n"
-                f"[\n"
-                f"  {{\n"
-                f'    "finding_id": "F{paper_num}_1",\n'
-                f'    "claim": "One clear sentence stating the finding",\n'
-                f'    "methodology": "How this was established (method, dataset, experiment)",\n'
-                f'    "results": "Specific evidence with exact numbers/percentages",\n'
-                f'    "limitations": "Limitations the authors acknowledge for this finding",\n'
-                f'    "significance": "Why this finding matters to the field"\n'
-                f"  }}\n"
-                f"]\n"
-                f"```\n\n"
-                f"Rules:\n"
-                f"• Include 3-6 findings per paper.\n"
-                f"• finding_id format: F{paper_num}_1, F{paper_num}_2, …\n"
-                f"• Use exact numbers from the paper, not paraphrases.\n"
-                f"• Distinguish empirical findings from speculative claims."
-            ),
-            expected_output=(
-                f"Valid JSON array with 3-6 structured findings from Paper {paper_num}, "
-                f"each with finding_id, claim, methodology, results, limitations, significance."
-            ),
-            agent=agent,
-            context=[ingest_task],
         )
 
     def _build_synthesis_task(
         self,
         agent: Agent,
         n: int,
-        findings_tasks: list[Task],
-        summary_tasks: list[Task],
+        paper_analysis_tasks: list[Task],
     ) -> Task:
         paper_ids = ", ".join(f"paper_{i+1}" for i in range(n))
         return Task(
             description=(
                 f"You have received key findings and summaries from {n} research paper(s) "
-                f"as context. Synthesise these into a cohesive literature review and "
-                f"concept map.\n\n"
-                f"SYNTHESIS REQUIREMENTS (not a sequential list of papers):\n"
-                f"1. Where do the papers AGREE or build on each other? (cite finding IDs: F1_1, etc.)\n"
-                f"2. Where do papers CONTRADICT or challenge each other?\n"
-                f"3. How do the METHODOLOGICAL APPROACHES differ?\n"
-                f"4. What has been ESTABLISHED vs. what remains OPEN or uncertain?\n"
-                f"5. What is the overall intellectual landscape these papers define?\n\n"
-                f"OUTPUT — follow this EXACT structure:\n\n"
+                f"as context. Write an evidence-led comparative analysis, not a sequence "
+                f"of paper summaries. Use only claims supported by the provided context; "
+                f"never invent results, comparisons, or citations.\n\n"
+                f"For {n} paper(s), write 300-450 words in total under these exact headings:\n"
                 f"## LITERATURE REVIEW\n"
-                f"[400-600 words of synthesised analytical prose. Reference papers as "
-                f"'Paper 1', 'Paper 2', etc. Be comparative and analytical, not descriptive.]\n\n"
+                f"### Shared findings and points of agreement\n"
+                f"Compare the specific claims that align. For 2+ papers, cite at least "
+                f"two direct comparisons using Paper N and finding IDs (for example F1_1). "
+                f"For one paper, state that cross-paper comparison is not possible and "
+                f"compare distinct results or claims within that paper instead.\n"
+                f"### Differences, conflicts, and methods\n"
+                f"Compare research questions, data, methods, and reported results. Explain "
+                f"whether any apparent conflict is real or whether study design/context "
+                f"could explain it. Say explicitly when the supplied evidence shows no "
+                f"direct contradiction; do not manufacture one.\n"
+                f"### Evidence strength and limitations\n"
+                f"Compare what the evidence supports, what remains uncertain, and the "
+                f"limitations that constrain conclusions. Cite the relevant paper/finding.\n"
+                f"### Synthesis and open research gap\n"
+                f"State the combined conclusion and one specific unresolved gap grounded "
+                f"in the papers. Make clear when a conclusion is tentative.\n\n"
+                f"Be analytical and specific; avoid generic filler and unsupported claims.\n\n"
                 f"## CONCEPT MAP JSON\n"
                 f"```json\n"
                 f"{{\n"
@@ -334,17 +307,17 @@ class ResearchCrew:
                 f"}}\n"
                 f"```\n\n"
                 f"Allowed relationship types: builds_on | contradicts | shares_method | shares_theme\n"
-                f"Node count: {n + 3} to {n + 7} nodes (paper nodes: {paper_ids}, plus concept/theme nodes).\n"
-                f"Edge count: {n + 2} to {n * 4 + 2} edges.\n"
+                f"Include all {n} paper nodes plus 3-5 meaningful concept/theme nodes and "
+                f"only evidence-supported edges. Paper nodes: {paper_ids}.\n"
                 f"CRITICAL: Paper node IDs MUST be: {paper_ids}."
             ),
             expected_output=(
-                f"A 400-600 word literature review synthesis (## LITERATURE REVIEW section) "
-                f"followed by a valid JSON concept map (## CONCEPT MAP JSON section) with "
-                f"nodes and edges encoding relationships between papers, concepts, and themes."
+                f"A 300-450 word comparative literature review with all four requested "
+                f"subheadings, followed by valid concept-map JSON with evidence-supported "
+                f"paper/concept nodes and relationships."
             ),
             agent=agent,
-            context=findings_tasks + summary_tasks,
+            context=paper_analysis_tasks,
         )
 
     def _build_future_task(
@@ -352,31 +325,37 @@ class ResearchCrew:
         agent: Agent,
         n: int,
         synthesis_task: Task,
-        findings_tasks: list[Task],
+        paper_analysis_tasks: list[Task],
     ) -> Task:
         return Task(
             description=(
-                f"Based on the literature review and key findings from {n} papers "
-                f"(provided in context), identify 3-5 concrete future research directions.\n\n"
-                f"For each direction, provide:\n"
-                f"• A descriptive title\n"
-                f"• One specific sentence stating the research direction\n"
-                f"• Motivation citing specific papers/findings (Paper 1, F1_2, etc.)\n"
-                f"• Brief methodological approach that could address it\n\n"
-                f"Format each direction EXACTLY as:\n"
+                f"Based only on the supplied literature review and findings from {n} "
+                f"paper(s), propose exactly 3 distinct, feasible future research directions. "
+                f"Each must address a real gap or limitation in the evidence, not merely "
+                f"repeat a paper's conclusion. Do not invent citations, datasets, or results. "
+                f"Use Paper N and finding IDs (such as F1_2) when available. Clearly mark "
+                f"proposed hypotheses as hypotheses, not established facts.\n\n"
+                f"Write 80-120 words per direction and use this exact format:\n"
                 f"1. **[Direction Title]**\n"
-                f"   Research Direction: [Specific one-sentence statement]\n"
-                f"   Motivation: [Evidence from Paper X, finding F_Y, or stated limitation]\n"
-                f"   Approach: [Methodological suggestion]\n\n"
-                f"Avoid vague directions like 'more research is needed.' Be specific and grounded."
+                f"   Research Question: [Specific, answerable question or hypothesis.]\n"
+                f"   Evidence Gap: [What is unknown and why; cite Paper N/Finding ID and "
+                f"the relevant result or limitation.]\n"
+                f"   Proposed Study: [Concrete design, population/data, comparison or "
+                f"intervention, and key method.]\n"
+                f"   Evaluation & Expected Contribution: [Primary outcomes/metrics, what "
+                f"result would support the hypothesis, and how the study would advance "
+                f"understanding.]\n\n"
+                f"Make the three directions non-overlapping and specific enough that a "
+                f"researcher could begin designing each study. Do not output an introduction "
+                f"or a generic concluding paragraph."
             ),
             expected_output=(
-                f"3-5 formatted future research directions, each with a bold title, "
-                f"specific direction statement, motivation citing specific papers/findings, "
-                f"and a methodological approach suggestion."
+                f"Exactly three evidence-grounded research proposals, each with a title, "
+                f"research question, cited evidence gap, concrete study design, and "
+                f"evaluation plan with expected contribution."
             ),
             agent=agent,
-            context=[synthesis_task] + findings_tasks,
+            context=[synthesis_task] + paper_analysis_tasks,
         )
 
     # ------------------------------------------------------------------
@@ -387,70 +366,81 @@ class ResearchCrew:
         """Build and execute the research crew. Returns a structured results dict."""
         n = len(self.pdf_paths)
 
-        # Instantiate agents
-        ingestion_agent = create_ingestion_agent(self.llm)
-        summarizer_agent = create_summarizer_agent(self.llm)
-        findings_agent = create_findings_agent(self.llm)
+        # PDF text extraction is deterministic local work, not an LLM task.
+        # Summaries and findings are produced together in one model call per paper.
+        paper_analyst = create_summarizer_agent(self.llm)
         synthesis_agent = create_synthesis_agent(self.llm)
         future_agent = create_future_agent(self.llm)
 
-        # Build tasks interleaved per paper (ensures context is fresh for each paper)
+        # Build one model task per paper, followed by the two cross-paper tasks.
         all_tasks: list[Task] = []
-        ingest_tasks: list[Task] = []
-        summary_tasks: list[Task] = []
-        findings_tasks: list[Task] = []
+        paper_analysis_tasks: list[Task] = []
 
-        self._progress(1, "Ingestion Agent", "running", f"Extracting text from {n} paper(s)…")
+        self._progress(1, "PDF Extraction", "running", f"Extracting text from {n} paper(s)…")
+        pdf_tool = PDFExtractionTool()
 
         for i, pdf_path in enumerate(self.pdf_paths):
             paper_num = i + 1
+            paper_data = pdf_tool.extract_paper(pdf_path)
+            paper_data["full_text"] = paper_data["full_text"][:3_000]
+            paper_data["sections"] = {
+                name: section[:400]
+                for name, section in paper_data["sections"].items()
+            }
+            paper_task = self._build_paper_analysis_task(
+                paper_analyst, paper_num, paper_data
+            )
+            all_tasks.append(paper_task)
+            paper_analysis_tasks.append(paper_task)
 
-            ingest = self._build_ingest_task(ingestion_agent, paper_num, pdf_path)
-            summary = self._build_summary_task(summarizer_agent, paper_num, ingest)
-            findings = self._build_findings_task(findings_agent, paper_num, ingest)
-
-            all_tasks.extend([ingest, summary, findings])
-            ingest_tasks.append(ingest)
-            summary_tasks.append(summary)
-            findings_tasks.append(findings)
-
-        self._progress(2, "Summarizer Agent", "running", "Generating per-paper summaries…")
-        self._progress(3, "Key Findings Agent", "running", "Extracting structured key findings…")
+        self._progress(1, "PDF Extraction", "complete", f"Extracted text from {n} paper(s).")
+        self._progress(2, "Paper Analysis", "running", "Generating summaries and key findings…")
 
         synthesis = self._build_synthesis_task(
-            synthesis_agent, n, findings_tasks, summary_tasks
+            synthesis_agent, n, paper_analysis_tasks
         )
         all_tasks.append(synthesis)
 
-        self._progress(4, "Synthesis Agent", "running", "Synthesising literature review and concept map…")
-
-        future = self._build_future_task(future_agent, n, synthesis, findings_tasks)
+        future = self._build_future_task(
+            future_agent, n, synthesis, paper_analysis_tasks
+        )
         all_tasks.append(future)
 
-        self._progress(5, "Future Directions Agent", "running", "Identifying research gaps…")
-
-        # step_callback: minimal pause between steps for Gemini (60 RPM, 1M TPM
-        # free tier) — no significant rate-limiting needed.
+        # Only add a small buffer for cloud providers; local Ollama needs no
+        # inter-step rate-limit delay.
         _step_count = [0]
         def _pace_step(step_output):
             _step_count[0] += 1
-            wait = 2  # seconds — Gemini free tier handles 60 RPM, just a small buffer
-            print(f"[Rate-limit guard] Step {_step_count[0]} done. Waiting {wait}s before next step…")
-            time.sleep(wait)
+            wait = 0 if self.llm.model.startswith("ollama/") else 2
+            if wait:
+                print(f"[Rate-limit guard] Step {_step_count[0]} done. Waiting {wait}s before next step…")
+                time.sleep(wait)
+
+        completed_tasks = [0]
+
+        def _report_task_progress(_task_output):
+            completed_tasks[0] += 1
+            if completed_tasks[0] == n:
+                self._progress(2, "Paper Analysis", "complete", "All papers summarized and key findings extracted.")
+                self._progress(3, "Comparative Synthesis", "running", "Comparing evidence and mapping concepts…")
+            elif completed_tasks[0] == n + 1:
+                self._progress(3, "Comparative Synthesis", "complete", "Comparative literature review and concept map ready.")
+                self._progress(4, "Future Directions", "running", "Building evidence-grounded research proposals…")
+            elif completed_tasks[0] == n + 2:
+                self._progress(4, "Future Directions", "complete", "Future research proposals ready.")
 
         # Assemble the crew
         crew = Crew(
             agents=[
-                ingestion_agent,
-                summarizer_agent,
-                findings_agent,
+                paper_analyst,
                 synthesis_agent,
                 future_agent,
             ],
             tasks=all_tasks,
             process=Process.sequential,
             step_callback=_pace_step,
-            verbose=True,
+            task_callback=_report_task_progress,
+            verbose=False,
         )
 
         # Fire!
@@ -460,18 +450,16 @@ class ResearchCrew:
         # Parse outputs
         # ------------------------------------------------------------------
         paper_results = []
-        for i, (ingest_t, summary_t, findings_t) in enumerate(
-            zip(ingest_tasks, summary_tasks, findings_tasks)
-        ):
-            summary_raw = (summary_t.output.raw if summary_t.output else "").strip()
-            findings_raw = (findings_t.output.raw if findings_t.output else "[]").strip()
+        for i, paper_task in enumerate(paper_analysis_tasks):
+            raw = paper_task.output.raw if paper_task.output else ""
+            summary, findings = _parse_paper_analysis(raw, i + 1)
 
             paper_results.append(
                 {
                     "paper_index": i + 1,
                     "filename": os.path.basename(self.pdf_paths[i]),
-                    "summary": summary_raw,
-                    "findings": _parse_findings(findings_raw),
+                    "summary": summary,
+                    "findings": findings,
                 }
             )
 

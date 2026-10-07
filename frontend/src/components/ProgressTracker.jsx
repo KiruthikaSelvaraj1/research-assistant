@@ -1,9 +1,8 @@
 const AGENT_STEPS = [
-  { key: 'ingestion',   label: 'Ingestion Agent',         icon: '📥', desc: 'Extracting text and detecting sections from PDFs' },
-  { key: 'summarizer',  label: 'Summarizer Agent',         icon: '✍️',  desc: 'Writing 150-250 word summaries for each paper' },
-  { key: 'findings',    label: 'Key Findings Agent',       icon: '🔍', desc: 'Extracting structured claims, metrics, and limitations' },
-  { key: 'synthesis',   label: 'Synthesis Agent',          icon: '📚', desc: 'Synthesising cross-paper literature review and concept map' },
-  { key: 'future',      label: 'Future Directions Agent',  icon: '🚀', desc: 'Identifying research gaps and future opportunities' },
+  { key: 'extraction', label: 'PDF Extraction', icon: '📥', desc: 'Extracting text and detecting sections locally' },
+  { key: 'paper-analysis', label: 'Paper Analysis', icon: '🔍', desc: 'Writing a summary and structured findings for each paper' },
+  { key: 'synthesis', label: 'Comparative Synthesis', icon: '📚', desc: 'Comparing evidence and mapping concepts across papers' },
+  { key: 'future', label: 'Future Directions', icon: '🚀', desc: 'Developing evidence-grounded research proposals' },
 ]
 
 function stepStatus(stepIndex, progress, overallStatus) {
@@ -67,11 +66,13 @@ export function ProgressTracker({ progress, status }) {
         <div
           className="progress-bar-fill"
           style={{
-            width: `${Math.min(100, (progress.filter(p => p.status === 'complete' || p.status === 'running').length / 6) * 100)}%`
+            width: `${Math.min(100, (progress.filter(p => p.status === 'complete').length / AGENT_STEPS.length) * 100)}%`
           }}
         />
       </div>
-      <p className="progress-hint">This typically takes 1-2 minutes for 2-3 papers.</p>
+      <p className="progress-hint">
+        Timing depends on paper length, hardware, and model. Local models may take several minutes.
+      </p>
     </div>
   )
 }

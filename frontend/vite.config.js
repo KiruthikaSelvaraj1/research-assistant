@@ -6,11 +6,11 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/upload': 'http://localhost:8000',
-      '/analyze': 'http://localhost:8000',
-      '/progress': 'http://localhost:8000',
-      '/results': 'http://localhost:8000',
-      '/health': 'http://localhost:8000',
+      '/upload': 'http://localhost:8001',
+      '/analyze': 'http://localhost:8001',
+      '/progress': 'http://localhost:8001',
+      '/results': 'http://localhost:8001',
+      '/health': 'http://localhost:8001',
     },
   },
 })

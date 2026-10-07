@@ -2,11 +2,11 @@
 
 A portfolio-quality, multi-agent AI system that analyses 1-3 academic PDF papers and produces:
 
-- **Per-paper summaries** — 150-250 word precision summaries  
+- **Per-paper summaries** — 150-200 word precision summaries
 - **Structured key findings** — claims, methodology, metrics, and limitations as JSON  
 - **Synthesised literature review** — cross-paper analysis (not sequential summaries)  
 - **Interactive concept map** — force-directed D3 graph of papers, concepts, and relationships  
-- **Future research directions** — 3-5 grounded suggestions with paper citations  
+- **Future research directions** — three grounded study proposals with paper citations
 
 ---
 
@@ -16,8 +16,8 @@ A portfolio-quality, multi-agent AI system that analyses 1-3 academic PDF papers
 graph TD
     UI["React SPA (Vite + D3)"]
     API["FastAPI Backend"]
-    CREW["CrewAI Sequential Crew"]
-    LLM["Claude claude-sonnet-4-6 (Anthropic)"]
+    CREW["CrewAI Sequential Pipeline"]
+    LLM["Configured LLM provider (Gemini, Groq, Ollama, or Anthropic)"]
 
     UI -->|POST /upload| API
     UI -->|POST /analyze| API
@@ -25,36 +25,36 @@ graph TD
     UI -->|GET /results| API
 
     API -->|BackgroundTask| CREW
-    CREW --> A1["📥 Ingestion Agent\n(PDFExtractionTool)"]
-    CREW --> A2["✍️ Summarizer Agent"]
-    CREW --> A3["🔍 Key Findings Agent"]
-    CREW --> A4["📚 Synthesis Agent\n(Lit Review + Concept Map JSON)"]
-    CREW --> A5["🚀 Future Directions Agent"]
+    CREW --> A1["📥 Local PDF text extraction\n(no LLM call)"]
+    CREW --> A2["✍️ Per-paper analysis\n(summary + findings in one call)"]
+    CREW --> A3["📚 Comparative synthesis\n(lit review + concept map)"]
+    CREW --> A4["🚀 Future directions"]
 
-    A1 & A2 & A3 & A4 & A5 --> LLM
+    A2 & A3 & A4 --> LLM
 
-    style A4 fill:#6366f1,color:#fff
+    style A3 fill:#6366f1,color:#fff
 ```
 
 ### Agent Roles
 
 | Agent | Role | Output |
 |---|---|---|
-| **Ingestion** | Extracts and structures PDF text, detects sections | Cleaned text + section dict |
-| **Summarizer** | 150-250 word per-paper summary | Prose |
-| **Key Findings** | Structured findings extraction | JSON list (claim, method, results, limitations) |
-| **Synthesis** | Cross-paper lit review + concept map | Prose (400-600 words) + JSON graph |
-| **Future Directions** | Evidence-grounded research gap analysis | Formatted bullet list |
+| **PDF extraction** | Extracts text and detects sections locally | Source text + section metadata |
+| **Paper analysis** | Summarizes and extracts findings in one LLM call per paper | Summary + structured findings JSON |
+| **Comparative synthesis** | Compares findings and methods across papers | Literature review + concept map JSON |
+| **Future directions** | Proposes research questions and study designs grounded in evidence | Three structured proposals |
 
 Task flow (for 2 papers):
 ```
-Ingest_1 → Summary_1 → Findings_1
-Ingest_2 → Summary_2 → Findings_2
-                             ↓
-                     Synthesis (uses all findings + summaries)
-                             ↓
-                     Future Directions
+Extract PDFs locally
+       ↓
+Paper analysis 1 → Paper analysis 2
+       ↓
+Comparative synthesis → Future directions
 ```
+
+The pipeline makes `number of papers + 2` LLM calls rather than separate
+ingestion, summary, and findings calls for every paper. PDF extraction is local.
 
 ---
 
@@ -64,7 +64,7 @@ Ingest_2 → Summary_2 → Findings_2
 
 - Python 3.11+
 - Node.js 18+
-- Anthropic API key
+- An API key for Google Gemini, Groq, or Anthropic (or a local Ollama installation)
 
 ### 1. Clone and configure environment
 
@@ -72,7 +72,7 @@ Ingest_2 → Summary_2 → Findings_2
 git clone <repo-url>
 cd 5daysreaserchassistant
 cp .env.example .env
-# Edit .env and set ANTHROPIC_API_KEY=your_key_here
+# Edit .env and set GEMINI_API_KEY=your_key_here
 ```
 
 ### 2. Install Python dependencies
@@ -92,7 +92,7 @@ cd ..
 ### 4. Run the backend
 
 ```bash
-uvicorn backend.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn backend.main:app --reload --host 0.0.0.0 --port 8001
 ```
 
 ### 5. Run the frontend (separate terminal)
@@ -104,6 +104,15 @@ npm run dev
 
 Open **http://localhost:5173** in your browser.
 
+Gemini is preferred when both Gemini and Groq keys are configured because free Groq
+quotas can limit output tokens per minute. To explicitly use Groq, set
+`LLM_MODEL=groq/qwen/qwen3.8-27b`; if its quota is exhausted, wait for the provider's
+reset window or use a provider with a higher available quota. Gemini defaults to
+`gemini/gemini-3.8-flash`; set `LLM_MODEL=gemini/<model-id>` to choose another
+Gemini API model. To use a locally running Ollama model instead, set
+`LLM_MODEL=ollama/<model-name>` (for example, `ollama/llama3.2:3b`) and ensure
+Ollama is installed and the model has been downloaded with `ollama pull`.
+
 ---
 
 ## Usage
@@ -114,8 +123,8 @@ Open **http://localhost:5173** in your browser.
 4. Explore results across 4 tabs:
    - **Papers** — summaries and structured key findings
    - **Concept Map** — interactive D3 force-directed graph (drag, zoom, click nodes)
-   - **Literature Review** — synthesised cross-paper analysis
-   - **Future Directions** — research gap suggestions
+   - **Literature Review** — evidence-cited comparisons of findings, methods, limitations, and research gaps
+   - **Future Directions** — three evidence-grounded study proposals, each with a question, gap, design, and evaluation plan
 
 ---
 

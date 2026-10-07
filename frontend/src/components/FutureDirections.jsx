@@ -1,28 +1,44 @@
 export function FutureDirections({ text }) {
   if (!text) return null
 
-  // Parse the formatted output into structured directions
+  // Parse the labeled output while preserving multi-sentence field descriptions.
   const directions = []
-  const blocks = text.split(/(?=\d+\.\s+\*\*)/)
+  const blocks = text.split(/(?=^\s*(?:#{1,3}\s*)?\d+[.)]\s+.+$)/m)
 
   for (const block of blocks) {
     const trimmed = block.trim()
     if (!trimmed) continue
 
-    const titleMatch = trimmed.match(/^\d+\.\s+\*\*(.+?)\*\*/)
-    const dirMatch   = trimmed.match(/Research Direction:\s*(.+?)(?=\n|Motivation:|$)/s)
-    const motMatch   = trimmed.match(/Motivation:\s*(.+?)(?=\n\s*Approach:|$)/s)
-    const appMatch   = trimmed.match(/Approach:\s*(.+?)(?=\n\s*\d+\.|$)/s)
+    const titleMatch = trimmed.match(/^(?:#{1,3}\s*)?\d+[.)]\s+(?:\*\*|__)?(.+?)(?:\*\*|__)?\s*(?:\n|$)/)
+    if (!titleMatch) continue
+
+    const fieldValue = (label) => {
+      const labels = [
+        'Research Question',
+        'Evidence Gap',
+        'Proposed Study',
+        'Evaluation\\s*&\\s*Expected Contribution',
+      ]
+      const nextLabel = labels
+        .filter(candidate => candidate !== label)
+        .join('|')
+      const match = trimmed.match(new RegExp(
+        `(?:^|\\n)\\s*(?:[-*]\\s*)?\\*{0,2}${label}\\*{0,2}\\s*:\\s*([\\s\\S]*?)(?=\\n\\s*(?:[-*]\\s*)?\\*{0,2}(?:${nextLabel})\\*{0,2}\\s*:|$)`,
+        'i'
+      ))
+      return match ? match[1].trim() : ''
+    }
 
     directions.push({
-      title:      titleMatch  ? titleMatch[1].trim()  : `Direction ${directions.length + 1}`,
-      direction:  dirMatch    ? dirMatch[1].trim()    : trimmed.slice(0, 200),
-      motivation: motMatch    ? motMatch[1].trim()    : '',
-      approach:   appMatch    ? appMatch[1].trim()    : '',
+      title: titleMatch[1].trim(),
+      question: fieldValue('Research Question'),
+      gap: fieldValue('Evidence Gap'),
+      study: fieldValue('Proposed Study'),
+      evaluation: fieldValue('Evaluation\\s*&\\s*Expected Contribution'),
     })
   }
 
-  // Fallback: if parsing failed, show raw text
+  // If the model did not follow the labeled format, preserve its full response.
   if (directions.length === 0) {
     return (
       <div className="future-section">
@@ -53,18 +69,18 @@ export function FutureDirections({ text }) {
             <div className="direction-body">
               <h3 className="direction-title">{d.title}</h3>
 
-              {d.direction && (
+              {d.question && (
                 <div className="direction-field">
-                  <span className="direction-field-label">🎯 Research Direction</span>
-                  <p>{d.direction}</p>
+                  <span className="direction-field-label">🎯 Research Question</span>
+                  <p>{d.question}</p>
                 </div>
               )}
-              {d.motivation && (
+              {d.gap && (
                 <div className="direction-field">
-                  <span className="direction-field-label">💡 Motivation</span>
+                  <span className="direction-field-label">💡 Evidence Gap</span>
                   <p className="motivation-text"
                     dangerouslySetInnerHTML={{
-                      __html: d.motivation.replace(
+                      __html: d.gap.replace(
                         /\b(Paper\s+\d+|F\d+_\d+)\b/g,
                         '<mark class="paper-ref">$1</mark>'
                       )
@@ -72,10 +88,16 @@ export function FutureDirections({ text }) {
                   />
                 </div>
               )}
-              {d.approach && (
+              {d.study && (
                 <div className="direction-field">
-                  <span className="direction-field-label">🔬 Approach</span>
-                  <p>{d.approach}</p>
+                  <span className="direction-field-label">🔬 Proposed Study</span>
+                  <p>{d.study}</p>
+                </div>
+              )}
+              {d.evaluation && (
+                <div className="direction-field">
+                  <span className="direction-field-label">📈 Evaluation & Expected Contribution</span>
+                  <p>{d.evaluation}</p>
                 </div>
               )}
             </div>

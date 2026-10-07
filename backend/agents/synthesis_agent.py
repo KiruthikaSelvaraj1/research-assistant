@@ -1,10 +1,4 @@
-"""
-Agent 4 — Literature Review Synthesizer
-Synthesises findings across ALL uploaded papers into a cohesive literature review
-(400-600 words) PLUS a structured concept map JSON
-(nodes = papers/concepts/themes, edges = relationships).
-This is the multi-agent centrepiece: it explicitly cross-references all papers.
-"""
+"""Synthesizes evidence across papers into a comparative review and concept map."""
 from crewai import Agent, LLM
 
 
@@ -34,7 +28,7 @@ def create_synthesis_agent(llm: LLM) -> Agent:
             "reflect genuine intellectual relationships, not superficial keyword overlap."
         ),
         llm=llm,
-        verbose=True,
+        verbose=False,
         allow_delegation=False,
-        max_iter=3,
+        max_iter=1,
     )

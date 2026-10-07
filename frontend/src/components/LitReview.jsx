@@ -1,11 +1,18 @@
 export function LitReview({ text, papers }) {
   if (!text) return null
 
-  // Highlight Paper 1, Paper 2, ... references in the text
-  const highlighted = text.replace(
-    /\b(Paper\s+\d+)\b/g,
-    '<mark class="paper-ref">$1</mark>'
-  )
+  const sections = text
+    .split(/(?=^#{1,3}\s+.+$)/m)
+    .map(section => section.trim())
+    .filter(Boolean)
+
+  const renderReferences = value => value
+    .split(/(\bPaper\s+\d+|\bF\d+_\d+\b)/g)
+    .map((part, index) => (
+      /^(Paper\s+\d+|F\d+_\d+)$/.test(part)
+        ? <mark key={index} className="paper-ref">{part}</mark>
+        : part
+    ))
 
   return (
     <div className="litreview-section">
@@ -29,10 +36,22 @@ export function LitReview({ text, papers }) {
       )}
 
       <div className="glass-card litreview-body">
-        <div
-          className="litreview-text"
-          dangerouslySetInnerHTML={{ __html: highlighted }}
-        />
+        <div className="litreview-text">
+          {sections.map((section, index) => {
+            const [firstLine, ...rest] = section.split('\n')
+            const heading = firstLine.match(/^#{1,3}\s+(.+)$/)
+            const body = heading ? rest.join('\n').trim() : section
+
+            return (
+              <section key={index} className="litreview-subsection">
+                {heading && <h3>{heading[1]}</h3>}
+                {body.split(/\n\s*\n/).filter(Boolean).map((paragraph, paragraphIndex) => (
+                  <p key={paragraphIndex}>{renderReferences(paragraph)}</p>
+                ))}
+              </section>
+            )
+          })}
+        </div>
       </div>
     </div>
   )

@@ -93,7 +93,7 @@ export default function App() {
             <span className="logo-icon">🧠</span>
             <div>
               <h1 className="app-title gradient-text">AI Research Assistant</h1>
-              <p className="app-subtitle">Multi-agent analysis powered by CrewAI + Claude</p>
+              <p className="app-subtitle">Multi-agent analysis powered by CrewAI + your configured LLM</p>
             </div>
           </div>
           {view === VIEWS.RESULTS && (
@@ -103,7 +103,7 @@ export default function App() {
           )}
         </div>
         <div className="agent-badges">
-          {['Ingestion', 'Summarizer', 'Key Findings', 'Synthesis', 'Future Directions'].map(a => (
+          {['PDF Extraction', 'Paper Analysis', 'Comparative Synthesis', 'Future Directions'].map(a => (
             <span key={a} className="badge">{a}</span>
           ))}
         </div>
@@ -125,7 +125,7 @@ export default function App() {
             <div className="upload-hero">
               <h2 className="section-title">Upload Research Papers</h2>
               <p className="section-desc">
-                Upload 1-3 academic PDFs. Our crew of 5 specialised AI agents will
+                Upload 1-3 academic PDFs. Our research pipeline will
                 analyse them, compare findings, synthesise a literature review, and
                 map the conceptual relationships.
               </p>
@@ -136,12 +136,12 @@ export default function App() {
             />
             <div className="feature-grid">
               {[
-                { icon: '📄', title: 'Per-Paper Summaries', desc: '150-250 word precision summaries capturing methodology and key results' },
+                { icon: '📄', title: 'Per-Paper Summaries', desc: '150-200 word summaries capturing methodology and key results' },
                 { icon: '🔍', title: 'Key Findings Extraction', desc: 'Structured JSON: claims, methods, metrics, and limitations per paper' },
                 { icon: '📚', title: 'Literature Review', desc: 'Cross-paper synthesis identifying agreements, conflicts, and gaps' },
                 { icon: '🕸️', title: 'Interactive Concept Map', desc: 'Force-directed graph of themes, papers, and their relationships' },
-                { icon: '🚀', title: 'Future Directions', desc: '3-5 concrete research directions grounded in the evidence' },
-                { icon: '🤖', title: '5 Specialised Agents', desc: 'Each agent has a unique role, goal, and backstory via CrewAI' },
+                { icon: '🚀', title: 'Future Directions', desc: 'Three concrete research proposals grounded in the evidence' },
+                { icon: '⚡', title: 'Faster Analysis Pipeline', desc: 'Local PDF extraction and combined per-paper analysis reduce model calls' },
               ].map(f => (
                 <div key={f.title} className="feature-card glass-card">
                   <span className="feature-icon">{f.icon}</span>
@@ -219,7 +219,7 @@ export default function App() {
       </main>
 
       <footer className="app-footer">
-        <p>Built with CrewAI · Claude claude-sonnet-4-6 · FastAPI · React · D3</p>
+        <p>Built with CrewAI · FastAPI · React · D3</p>
       </footer>
     </div>
   )
