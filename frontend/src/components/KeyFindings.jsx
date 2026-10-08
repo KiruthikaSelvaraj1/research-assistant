@@ -8,7 +8,7 @@ const FIELD_LABELS = {
   significance:{ icon: '⭐', label: 'Significance' },
 }
 
-function FindingCard({ finding, index }) {
+function FindingCard({ finding, index, paper, jobId }) {
   const [open, setOpen] = useState(index === 0)
   return (
     <div className={`finding-card ${open ? 'open' : ''}`}>
@@ -30,13 +30,31 @@ function FindingCard({ finding, index }) {
               </div>
             ) : null
           ))}
+          {finding.evidence?.length > 0 && (
+            <div className="finding-evidence">
+              <span className="field-label">Verified source passage</span>
+              {finding.evidence.map((evidence, evidenceIndex) => (
+                <blockquote key={`${evidence.page}-${evidenceIndex}`}>
+                  <p>“{evidence.quote}”</p>
+                  <a
+                    href={`/papers/${jobId}/${paper.paper_index}#page=${evidence.page}`}
+                    target="_blank"
+                    rel="noreferrer"
+                  >
+                    Open Paper {paper.paper_index} · page {evidence.page}
+                    <span aria-hidden="true"> ↗</span>
+                  </a>
+                </blockquote>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
   )
 }
 
-export function KeyFindings({ paper }) {
+export function KeyFindings({ paper, jobId }) {
   if (!paper.findings || paper.findings.length === 0) return null
   return (
     <div className="key-findings glass-card">
@@ -46,7 +64,13 @@ export function KeyFindings({ paper }) {
       </h3>
       <div className="findings-list">
         {paper.findings.map((f, i) => (
-          <FindingCard key={f.finding_id || i} finding={f} index={i} />
+          <FindingCard
+            key={f.finding_id || i}
+            finding={f}
+            index={i}
+            paper={paper}
+            jobId={jobId}
+          />
         ))}
       </div>
     </div>

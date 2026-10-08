@@ -14,6 +14,8 @@ from typing import Type
 from crewai.tools import BaseTool
 from pydantic import BaseModel, Field
 
+MAX_SOURCE_CHARS = 250_000
+
 
 class PDFExtractionInput(BaseModel):
     pdf_path: str = Field(
@@ -39,7 +41,8 @@ class PDFExtractionTool(BaseTool):
 
     def extract_paper(self, pdf_path: str) -> dict:
         """Extract bounded text and section metadata without an LLM tool call."""
-        text = self._extract_text(pdf_path)
+        source_pages, source_truncated = self._extract_pages(pdf_path)
+        text = "\n\n".join(page["text"] for page in source_pages)
         if not text.strip():
             raise ValueError(
                 f"No text could be extracted from {os.path.basename(pdf_path)} "
@@ -51,6 +54,8 @@ class PDFExtractionTool(BaseTool):
             "filename": os.path.basename(pdf_path),
             # Bound source text passed into the analysis pipeline.
             "full_text": text[:5_000],
+            "source_pages": source_pages,
+            "source_truncated": source_truncated,
             "sections": sections,
             "metadata": {
                 "char_count": len(text),
@@ -75,32 +80,53 @@ class PDFExtractionTool(BaseTool):
     # Private helpers
     # ------------------------------------------------------------------
 
-    def _extract_text(self, pdf_path: str) -> str:
-        """Try pdfplumber first, fall back to pypdf."""
-        text_parts: list[str] = []
-
+    def _extract_pages(self, pdf_path: str) -> tuple[list[dict], bool]:
+        """Extract page text and retain PDF page numbers for verifiable citations."""
         try:
             import pdfplumber  # noqa: PLC0415
 
             with pdfplumber.open(pdf_path) as pdf:
-                for page in pdf.pages:
+                pages: list[dict] = []
+                remaining = MAX_SOURCE_CHARS
+                truncated = False
+                for page_number, page in enumerate(pdf.pages, start=1):
                     page_text = page.extract_text()
-                    if page_text:
-                        text_parts.append(page_text)
+                    if not page_text:
+                        continue
+                    if remaining <= 0:
+                        truncated = True
+                        break
+                    stored_text = page_text[:remaining]
+                    pages.append({"page": page_number, "text": stored_text})
+                    remaining -= len(stored_text)
+                    if len(stored_text) < len(page_text):
+                        truncated = True
+                        break
+                return pages, truncated
         except Exception:  # noqa: BLE001
-            # Fallback
             try:
                 from pypdf import PdfReader  # noqa: PLC0415
 
                 reader = PdfReader(pdf_path)
-                for page in reader.pages:
+                pages: list[dict] = []
+                remaining = MAX_SOURCE_CHARS
+                truncated = False
+                for page_number, page in enumerate(reader.pages, start=1):
                     page_text = page.extract_text()
-                    if page_text:
-                        text_parts.append(page_text)
+                    if not page_text:
+                        continue
+                    if remaining <= 0:
+                        truncated = True
+                        break
+                    stored_text = page_text[:remaining]
+                    pages.append({"page": page_number, "text": stored_text})
+                    remaining -= len(stored_text)
+                    if len(stored_text) < len(page_text):
+                        truncated = True
+                        break
+                return pages, truncated
             except Exception as exc2:  # noqa: BLE001
                 raise RuntimeError(f"Both pdfplumber and pypdf failed: {exc2}") from exc2
-
-        return "\n\n".join(text_parts)
 
     def _detect_sections(self, text: str) -> dict[str, str]:
         """

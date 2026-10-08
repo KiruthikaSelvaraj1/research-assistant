@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { uploadPapers, startAnalysis, getProgress, getResults } from './api'
+import { uploadPapers, startAnalysis, analyzeDiscoveredPapers, getProgress, getResults } from './api'
 import { UploadZone } from './components/UploadZone'
 import { ProgressTracker } from './components/ProgressTracker'
 import { PaperSummary } from './components/PaperSummary'
@@ -7,10 +7,12 @@ import { KeyFindings } from './components/KeyFindings'
 import { LitReview } from './components/LitReview'
 import { ConceptMap } from './components/ConceptMap'
 import { FutureDirections } from './components/FutureDirections'
+import { AskPapers } from './components/AskPapers'
+import { PaperSearch } from './components/PaperSearch'
 
 // View state machine: idle → uploading → analyzing → results
 const VIEWS = { IDLE: 'idle', UPLOADING: 'uploading', ANALYZING: 'analyzing', RESULTS: 'results' }
-const TABS = ['Papers', 'Concept Map', 'Literature Review', 'Future Directions']
+const TABS = ['Papers', 'Concept Map', 'Literature Review', 'Future Directions', 'Ask Papers']
 
 export default function App() {
   const [view, setView] = useState(VIEWS.IDLE)
@@ -23,6 +25,38 @@ export default function App() {
   const [error, setError] = useState(null)
   const pollRef = useRef(null)
 
+  useEffect(() => {
+    const savedJobId = new URLSearchParams(window.location.search).get('job')
+    if (!savedJobId) return
+
+    let active = true
+    setJobId(savedJobId)
+    getProgress(savedJobId)
+      .then(async job => {
+        if (!active) return
+        setProgress(job.progress || [])
+        setJobStatus(job.status)
+        if (job.status === 'complete') {
+          const savedResults = await getResults(savedJobId)
+          if (!active) return
+          setResults(savedResults)
+          setView(VIEWS.RESULTS)
+        } else if (job.status === 'error') {
+          setError(job.error || 'Analysis failed.')
+          setView(VIEWS.IDLE)
+        } else {
+          setView(VIEWS.ANALYZING)
+        }
+      })
+      .catch(e => {
+        if (!active) return
+        setError(e.message)
+        setView(VIEWS.IDLE)
+      })
+
+    return () => { active = false }
+  }, [])
+
   // ── Upload ────────────────────────────────────────────────────────────────
   const handleUploadAndAnalyze = useCallback(async (files) => {
     setError(null)
@@ -33,6 +67,21 @@ export default function App() {
 
       const anRes = await startAnalysis(upRes.session_id)
       setJobId(anRes.job_id)
+      window.history.replaceState({}, '', `?job=${encodeURIComponent(anRes.job_id)}`)
+      setView(VIEWS.ANALYZING)
+    } catch (e) {
+      setError(e.message)
+      setView(VIEWS.IDLE)
+    }
+  }, [])
+
+  const handleAnalyzeDiscovered = useCallback(async (arxivIds) => {
+    setError(null)
+    setView(VIEWS.UPLOADING)
+    try {
+      const analysis = await analyzeDiscoveredPapers(arxivIds)
+      setJobId(analysis.job_id)
+      window.history.replaceState({}, '', `?job=${encodeURIComponent(analysis.job_id)}`)
       setView(VIEWS.ANALYZING)
     } catch (e) {
       setError(e.message)
@@ -44,35 +93,43 @@ export default function App() {
   useEffect(() => {
     if (view !== VIEWS.ANALYZING || !jobId) return
 
+    let active = true
     const poll = async () => {
+      let nextDelay = 2500
       try {
         const prog = await getProgress(jobId)
+        if (!active) return
         setProgress(prog.progress || [])
         setJobStatus(prog.status)
 
         if (prog.status === 'complete') {
-          clearInterval(pollRef.current)
           const res = await getResults(jobId)
+          if (!active) return
           setResults(res)
           setView(VIEWS.RESULTS)
+          return
         } else if (prog.status === 'error') {
-          clearInterval(pollRef.current)
           setError(prog.error || 'Analysis failed.')
           setView(VIEWS.IDLE)
+          return
         }
       } catch (e) {
-        // Network blip — keep polling
+        nextDelay = 5000
       }
+      if (active) pollRef.current = setTimeout(poll, nextDelay)
     }
 
-    poll() // immediate first check
-    pollRef.current = setInterval(poll, 2500)
-    return () => clearInterval(pollRef.current)
+    poll()
+    return () => {
+      active = false
+      clearTimeout(pollRef.current)
+    }
   }, [view, jobId])
 
   // ── Reset ─────────────────────────────────────────────────────────────────
   const handleReset = () => {
-    clearInterval(pollRef.current)
+    clearTimeout(pollRef.current)
+    window.history.replaceState({}, '', window.location.pathname)
     setView(VIEWS.IDLE)
     setSessionId(null)
     setJobId(null)
@@ -122,6 +179,10 @@ export default function App() {
         {/* IDLE / UPLOADING */}
         {(view === VIEWS.IDLE || view === VIEWS.UPLOADING) && (
           <div className="upload-section">
+            <PaperSearch
+              onAnalyzeDiscovered={handleAnalyzeDiscovered}
+              analyzing={view === VIEWS.UPLOADING}
+            />
             <div className="upload-hero">
               <h2 className="section-title">Upload Research Papers</h2>
               <p className="section-desc">
@@ -137,10 +198,11 @@ export default function App() {
             <div className="feature-grid">
               {[
                 { icon: '📄', title: 'Per-Paper Summaries', desc: '150-200 word summaries capturing methodology and key results' },
-                { icon: '🔍', title: 'Key Findings Extraction', desc: 'Structured JSON: claims, methods, metrics, and limitations per paper' },
+                { icon: '🔍', title: 'Evidence-Linked Findings', desc: 'Verify key claims against quotations linked to the original PDF page' },
                 { icon: '📚', title: 'Literature Review', desc: 'Cross-paper synthesis identifying agreements, conflicts, and gaps' },
                 { icon: '🕸️', title: 'Interactive Concept Map', desc: 'Force-directed graph of themes, papers, and their relationships' },
                 { icon: '🚀', title: 'Future Directions', desc: 'Three concrete research proposals grounded in the evidence' },
+                { icon: '💬', title: 'Ask Across Papers', desc: 'Ask questions and receive answers with source passages you can verify' },
                 { icon: '⚡', title: 'Faster Analysis Pipeline', desc: 'Local PDF extraction and combined per-paper analysis reduce model calls' },
               ].map(f => (
                 <div key={f.title} className="feature-card glass-card">
@@ -184,7 +246,7 @@ export default function App() {
                   {results.papers?.map(paper => (
                     <div key={paper.paper_index}>
                       <PaperSummary paper={paper} />
-                      <KeyFindings paper={paper} />
+                      <KeyFindings paper={paper} jobId={jobId} />
                     </div>
                   ))}
                 </div>
@@ -213,6 +275,14 @@ export default function App() {
               {activeTab === 3 && (
                 <FutureDirections text={results.future_directions} />
               )}
+
+              {/* Keep the Q&A conversation mounted while other result tabs are open. */}
+              <div style={{ display: activeTab === 4 ? 'contents' : 'none' }}>
+                <AskPapers
+                  jobId={jobId}
+                  sourceTruncated={results.source_truncated}
+                />
+              </div>
             </div>
           </div>
         )}

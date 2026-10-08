@@ -23,7 +23,8 @@ for _stream in (sys.stdout, sys.stderr):
 from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from starlette.concurrency import run_in_threadpool
 
 # CrewAI 1.15 annotates threading.Lock as a type. Python 3.11 exposes it as
 # a factory function, so provide a callable type-compatible adapter at import time.
@@ -38,7 +39,19 @@ class _CompatibleLock:
 threading.Lock = _CompatibleLock
 
 from backend.crew import ResearchCrew
-from backend.models import AnalyzeRequest, AnalyzeResponse, UploadResponse
+from backend.models import (
+    AnalyzeRequest,
+    AnalyzeDiscoveredRequest,
+    AnalyzeResponse,
+    AskQuestionRequest,
+    AskQuestionResponse,
+    DiscoveredPaper,
+    PaperSearchResponse,
+    PaperSearchRequest,
+    UploadResponse,
+)
+from backend.paper_search import download_arxiv_paper, search_papers
+from backend.qa import answer_from_sources
 
 load_dotenv()
 
@@ -88,6 +101,54 @@ async def startup() -> None:
 @app.get("/health")
 async def health() -> dict:
     return {"status": "ok", "message": "AI Research Assistant API is running"}
+
+
+@app.post("/search", response_model=PaperSearchResponse)
+async def discover_papers(request: PaperSearchRequest) -> PaperSearchResponse:
+    """Search Crossref and arXiv; only arXiv PDFs are downloaded for direct analysis."""
+    query = request.query.strip()
+    if len(query) < 3:
+        raise HTTPException(422, "Search query must contain at least 3 characters.")
+    papers, warnings = await run_in_threadpool(search_papers, query, request.limit)
+    return PaperSearchResponse(
+        papers=[DiscoveredPaper(**paper) for paper in papers],
+        warnings=warnings,
+    )
+
+
+@app.post("/analyze-discovered", response_model=AnalyzeResponse)
+async def analyze_discovered_papers(
+    request: AnalyzeDiscoveredRequest,
+    background_tasks: BackgroundTasks,
+) -> AnalyzeResponse:
+    """Download up to three validated arXiv PDFs and send them through normal analysis."""
+    arxiv_ids = list(dict.fromkeys(request.arxiv_ids))
+    if len(arxiv_ids) != len(request.arxiv_ids):
+        raise HTTPException(422, "Select each arXiv paper only once.")
+
+    downloaded = []
+    for arxiv_id in arxiv_ids:
+        content = await run_in_threadpool(download_arxiv_paper, arxiv_id)
+        downloaded.append((arxiv_id, content))
+
+    session_id = str(uuid.uuid4())
+    session_dir = UPLOAD_DIR / session_id
+    session_dir.mkdir(parents=True)
+    pdf_paths: list[str] = []
+    filenames: list[str] = []
+    try:
+        for arxiv_id, content in downloaded:
+            filename = f"arxiv_{arxiv_id.replace('/', '_')}.pdf"
+            path = session_dir / filename
+            path.write_bytes(content)
+            pdf_paths.append(str(path))
+            filenames.append(filename)
+    except OSError:
+        shutil.rmtree(session_dir, ignore_errors=True)
+        raise
+
+    sessions[session_id] = {"pdf_paths": pdf_paths, "filenames": filenames}
+    return await analyze(AnalyzeRequest(session_id=session_id), background_tasks)
 
 
 @app.post("/upload", response_model=UploadResponse)
@@ -173,6 +234,8 @@ async def analyze(
             }
         ],
         "results": None,
+        "source_pages": [],
+        "source_truncated": False,
         "error": None,
     }
 
@@ -195,6 +258,8 @@ def _run_analysis(job_id: str, pdf_paths: list[str]) -> None:
         crew = ResearchCrew(pdf_paths, job_id=job_id, jobs_store=jobs)
         results = crew.run()
 
+        jobs[job_id]["source_pages"] = results.pop("source_pages")
+        jobs[job_id]["source_truncated"] = results["source_truncated"]
         jobs[job_id]["status"] = "complete"
         jobs[job_id]["results"] = results
         jobs[job_id]["progress"].append(
@@ -255,3 +320,49 @@ async def get_results(job_id: str) -> JSONResponse:
         raise HTTPException(404, "Results not available.")
 
     return JSONResponse(content=j["results"])
+
+
+@app.get("/papers/{job_id}/{paper_index}")
+async def get_uploaded_paper(job_id: str, paper_index: int) -> FileResponse:
+    """Open an uploaded PDF inline so cited pages can be checked in the browser."""
+    if job_id not in jobs:
+        raise HTTPException(404, "Job not found.")
+    session = sessions.get(jobs[job_id]["session_id"])
+    if session is None:
+        raise HTTPException(404, "Uploaded papers are no longer available.")
+    pdf_paths = session["pdf_paths"]
+    if paper_index < 1 or paper_index > len(pdf_paths):
+        raise HTTPException(404, "Paper not found.")
+    pdf_path = Path(pdf_paths[paper_index - 1])
+    if not pdf_path.is_file():
+        raise HTTPException(404, "Uploaded paper file is no longer available.")
+    return FileResponse(
+        pdf_path,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'inline; filename="{pdf_path.name}"'},
+    )
+
+
+@app.post("/ask/{job_id}", response_model=AskQuestionResponse)
+async def ask_about_papers(
+    job_id: str,
+    request: AskQuestionRequest,
+) -> AskQuestionResponse:
+    """Answer a question from the completed job's PDFs with verified page citations."""
+    if job_id not in jobs:
+        raise HTTPException(404, "Job not found.")
+    job = jobs[job_id]
+    if job["status"] == "error":
+        raise HTTPException(409, "This analysis failed; upload papers and analyze them again.")
+    if job["status"] != "complete":
+        raise HTTPException(409, "Wait for paper analysis to finish before asking questions.")
+    try:
+        result = await run_in_threadpool(
+            answer_from_sources,
+            request.question.strip(),
+            job["source_pages"],
+            [turn.model_dump() for turn in request.history],
+        )
+    except ValueError as exc:
+        raise HTTPException(502, str(exc)) from exc
+    return AskQuestionResponse(**result)
