@@ -12,6 +12,7 @@ It produces:
 - **Structured key findings** — claims, methodology, metrics, and limitations as JSON  
 - **Verifiable evidence links** — source quotations linked to the paper and PDF page
 - **Side-by-side evidence matrix** — compare structured claims, methods, results, and limitations
+- **Downloadable reports** — export complete analyses as Markdown or structured JSON
 - **Synthesised literature review** — cross-paper analysis (not sequential summaries)  
 - **Interactive concept map** — force-directed D3 graph of papers, concepts, and relationships  
 - **Future research directions** — three grounded study proposals with paper citations
@@ -167,10 +168,14 @@ provider, and model latency or rate limits still apply.
    - **Literature Review** — side-by-side structured evidence matrix plus the cross-paper synthesis
    - **Future Directions** — three evidence-grounded study proposals, each with a question, gap, design, and evaluation plan
    - **Ask Papers** — ask questions across the PDFs and open cited passages in their original pages
+7. Download a Markdown report for reading/sharing or JSON for further analysis and reuse.
 
 The evidence matrix is a navigation and comparison aid, not a meta-analysis. Check
 the linked source pages before relying on extracted claims or comparing results
 across different datasets, methods, or evaluation settings.
+Downloaded reports remain on your device; links that open papers in the live app
+only work while that analysis job and its uploaded PDFs are still available on the
+server.
 
 Question answering uses local lexical passage retrieval over up to 250,000 extracted
 characters per paper. Quotations are checked against the original page text before

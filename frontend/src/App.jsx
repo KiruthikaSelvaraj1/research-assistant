@@ -9,6 +9,7 @@ import { ConceptMap } from './components/ConceptMap'
 import { FutureDirections } from './components/FutureDirections'
 import { AskPapers } from './components/AskPapers'
 import { PaperSearch } from './components/PaperSearch'
+import { downloadAnalysisReport } from './report'
 
 // View state machine: idle → uploading → analyzing → results
 const VIEWS = { IDLE: 'idle', UPLOADING: 'uploading', ANALYZING: 'analyzing', RESULTS: 'results' }
@@ -140,6 +141,14 @@ export default function App() {
     setActiveTab(0)
   }
 
+  const handleReportDownload = (format) => {
+    try {
+      downloadAnalysisReport(results, format, jobId, window.location.origin)
+    } catch (downloadError) {
+      setError(downloadError.message || 'Could not export the analysis report.')
+    }
+  }
+
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="app">
@@ -225,6 +234,23 @@ export default function App() {
         {/* RESULTS */}
         {view === VIEWS.RESULTS && results && (
           <div className="results-section">
+            <div className="results-toolbar">
+              <p>Download this analysis to keep or share it.</p>
+              <div className="report-actions">
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => handleReportDownload('markdown')}
+                >
+                  Download Markdown
+                </button>
+                <button
+                  className="btn btn-ghost"
+                  onClick={() => handleReportDownload('json')}
+                >
+                  Download JSON
+                </button>
+              </div>
+            </div>
             {/* Tab nav */}
             <div className="tab-nav">
               {TABS.map((tab, i) => (
