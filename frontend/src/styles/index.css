@@ -540,6 +540,58 @@ body {
   padding: 1px 5px; border-radius: 4px; font-weight: 600;
 }
 
+.comparison-section { display: flex; flex-direction: column; gap: 16px; }
+.comparison-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--glass-border);
+}
+.comparison-table {
+  width: 100%;
+  min-width: 900px;
+  border-collapse: collapse;
+  text-align: left;
+  font-size: 13px;
+}
+.comparison-table th,
+.comparison-table td {
+  padding: 14px 16px;
+  border-bottom: 1px solid var(--glass-border);
+  vertical-align: top;
+  line-height: 1.6;
+}
+.comparison-table thead th {
+  position: sticky;
+  top: 0;
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: 12px;
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.comparison-table tbody th {
+  min-width: 150px;
+  color: var(--text);
+  font-weight: 700;
+}
+.comparison-table tbody tr:last-child th,
+.comparison-table tbody tr:last-child td { border-bottom: 0; }
+.comparison-filename {
+  display: block;
+  margin-top: 4px;
+  color: var(--text-3);
+  font-size: 11px;
+  font-weight: 400;
+  overflow-wrap: anywhere;
+}
+.comparison-source {
+  display: block;
+  width: max-content;
+  color: var(--primary);
+  text-decoration: none;
+  font-weight: 600;
+}
+.comparison-source:hover { text-decoration: underline; }
+
 /* ── Future Directions tab ──────────────────────────────────────────────── */
 .future-section { display: flex; flex-direction: column; gap: 20px; }
 .directions-list { display: flex; flex-direction: column; gap: 20px; }

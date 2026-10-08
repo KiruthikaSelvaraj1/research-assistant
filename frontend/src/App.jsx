@@ -268,7 +268,7 @@ export default function App() {
 
               {/* Tab 2: Literature Review */}
               {activeTab === 2 && (
-                <LitReview text={results.lit_review} papers={results.papers} />
+                <LitReview text={results.lit_review} papers={results.papers} jobId={jobId} />
               )}
 
               {/* Tab 3: Future Directions */}

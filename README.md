@@ -1,10 +1,17 @@
 # AI Research Assistant 🧠
 
-A portfolio-quality, multi-agent AI system that analyses 1-3 academic PDF papers and produces:
+A research-focused assistant for discovering and comparing 1-3 academic papers. It
+combines structured AI analysis with checkable PDF evidence; it does not claim to
+replace expert review or guarantee that model-generated interpretations are correct.
+
+**Live app:** [ai-research-assistant-as88.onrender.com](https://ai-research-assistant-as88.onrender.com/)
+
+It produces:
 
 - **Per-paper summaries** — 150-200 word precision summaries
 - **Structured key findings** — claims, methodology, metrics, and limitations as JSON  
 - **Verifiable evidence links** — source quotations linked to the paper and PDF page
+- **Side-by-side evidence matrix** — compare structured claims, methods, results, and limitations
 - **Synthesised literature review** — cross-paper analysis (not sequential summaries)  
 - **Interactive concept map** — force-directed D3 graph of papers, concepts, and relationships  
 - **Future research directions** — three grounded study proposals with paper citations
@@ -30,7 +37,7 @@ graph TD
     UI -->|POST /analyze| API
     UI -->|GET /progress| API
     UI -->|GET /results| API
-    UI -->|POST /ask| API
+    UI -->|POST /ask/{job_id}| API
 
     API -->|BackgroundTask| CREW
     API -->|Search scholarly metadata| CROSSREF
@@ -67,6 +74,8 @@ Comparative synthesis → Future directions
 
 The pipeline makes `number of papers + 2` LLM calls rather than separate
 ingestion, summary, and findings calls for every paper. PDF extraction is local.
+The evidence matrix is rendered from the structured findings and does not require
+another model call.
 
 ---
 
@@ -81,8 +90,8 @@ ingestion, summary, and findings calls for every paper. PDF extraction is local.
 ### 1. Clone and configure environment
 
 ```bash
-git clone <repo-url>
-cd 5daysreaserchassistant
+git clone https://github.com/KiruthikaSelvaraj1/research-assistant.git
+cd research-assistant
 cp .env.example .env
 # Edit .env and set GEMINI_API_KEY=your_key_here
 ```
@@ -155,9 +164,13 @@ provider, and model latency or rate limits still apply.
 6. Explore results across 5 tabs:
    - **Papers** — summaries and structured key findings with quotations checked against the source page
    - **Concept Map** — interactive D3 force-directed graph (drag, zoom, click nodes)
-   - **Literature Review** — evidence-cited comparisons of findings, methods, limitations, and research gaps
+   - **Literature Review** — side-by-side structured evidence matrix plus the cross-paper synthesis
    - **Future Directions** — three evidence-grounded study proposals, each with a question, gap, design, and evaluation plan
    - **Ask Papers** — ask questions across the PDFs and open cited passages in their original pages
+
+The evidence matrix is a navigation and comparison aid, not a meta-analysis. Check
+the linked source pages before relying on extracted claims or comparing results
+across different datasets, methods, or evaluation settings.
 
 Question answering uses local lexical passage retrieval over up to 250,000 extracted
 characters per paper. Quotations are checked against the original page text before
@@ -185,12 +198,6 @@ samples/
 
 ---
 
-## Screenshot
-
-> _Upload 2-3 papers → click Analyse → see the concept map come alive_
-
-![Demo screenshot placeholder](docs/screenshot.png)
-
 ---
 
 ## API Reference
@@ -198,12 +205,16 @@ samples/
 | Method | Endpoint | Description |
 |---|---|---|
 | `GET` | `/health` | Health check |
+| `POST` | `/search` | Search Crossref and arXiv metadata |
+| `POST` | `/analyze-discovered` | Download and analyze 1-3 selected arXiv PDFs |
 | `POST` | `/upload` | Upload 1-3 PDFs, get `session_id` |
 | `POST` | `/analyze` | Start analysis, get `job_id` |
 | `GET` | `/progress/{job_id}` | Poll agent progress |
 | `GET` | `/results/{job_id}` | Fetch full results JSON |
 | `POST` | `/ask/{job_id}` | Ask a question and receive verified paper/page quotations |
 | `GET` | `/papers/{job_id}/{paper_index}` | Open an uploaded PDF inline for citation verification |
+
+Interactive API documentation is available at `/docs` when the backend is running.
 
 ---
 
@@ -232,7 +243,7 @@ samples/
 │           ├── ProgressTracker.jsx
 │           ├── PaperSummary.jsx
 │           ├── KeyFindings.jsx
-│           ├── LitReview.jsx
+│           ├── LitReview.jsx    # Narrative synthesis + evidence matrix
 │           ├── ConceptMap.jsx   ← D3 force graph
 │           ├── FutureDirections.jsx
 │           └── AskPapers.jsx    # Source-grounded questions and citations

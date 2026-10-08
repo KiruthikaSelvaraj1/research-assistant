@@ -1,7 +1,80 @@
-export function LitReview({ text, papers }) {
-  if (!text) return null
+function EvidenceMatrix({ papers, jobId }) {
+  const findings = (papers || []).flatMap(paper => (
+    (paper.findings || []).map((finding, index) => ({
+      paper,
+      finding,
+      key: finding.finding_id || `${paper.paper_index}-${index}`,
+    }))
+  ))
 
-  const sections = text
+  if (findings.length === 0) return null
+
+  return (
+    <section className="comparison-section" aria-labelledby="comparison-title">
+      <div className="section-header">
+        <h2 id="comparison-title" className="gradient-text">Side-by-Side Evidence Matrix</h2>
+        <p className="section-desc">
+          Compare the extracted claims, methods, results, and reported limitations.
+          This matrix uses structured findings from each paper; it adds no new claims.
+        </p>
+      </div>
+      <div
+        className="comparison-table-wrap glass-card"
+        role="region"
+        aria-label="Side-by-side paper evidence matrix"
+        tabIndex="0"
+      >
+        <table className="comparison-table">
+          <thead>
+            <tr>
+              <th scope="col">Paper</th>
+              <th scope="col">Finding</th>
+              <th scope="col">Method</th>
+              <th scope="col">Results</th>
+              <th scope="col">Limitations</th>
+              <th scope="col">Source</th>
+            </tr>
+          </thead>
+          <tbody>
+            {findings.map(({ paper, finding, key }) => (
+              <tr key={key}>
+                <th scope="row">
+                  Paper {paper.paper_index}
+                  <span className="comparison-filename">{paper.filename}</span>
+                </th>
+                <td>{finding.claim || 'Not reported'}</td>
+                <td>{finding.methodology || 'Not reported'}</td>
+                <td>{finding.results || 'Not reported'}</td>
+                <td>{finding.limitations || 'Not reported'}</td>
+                <td>
+                  {finding.evidence?.length
+                    ? finding.evidence.map((evidence, evidenceIndex) => (
+                      <a
+                        className="comparison-source"
+                        key={`${evidence.page}-${evidenceIndex}`}
+                        href={`/papers/${jobId}/${paper.paper_index}#page=${evidence.page}`}
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        Page {evidence.page}
+                        <span aria-hidden="true"> ↗</span>
+                      </a>
+                    ))
+                    : 'No verified quotation'}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  )
+}
+
+export function LitReview({ text, papers, jobId }) {
+  if (!text && (!papers || papers.every(paper => !paper.findings?.length))) return null
+
+  const sections = (text || '')
     .split(/(?=^#{1,3}\s+.+$)/m)
     .map(section => section.trim())
     .filter(Boolean)
@@ -16,6 +89,7 @@ export function LitReview({ text, papers }) {
 
   return (
     <div className="litreview-section">
+      <EvidenceMatrix papers={papers} jobId={jobId} />
       <div className="section-header">
         <h2 className="gradient-text">Synthesised Literature Review</h2>
         <p className="section-desc">
