@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: ai-research-assistant
+    runtime: docker
+    plan: free
+    branch: init
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    autoDeploy: true
+    envVars:
+      - key: GEMINI_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        value: gemini/gemini-3.8-flash

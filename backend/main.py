@@ -24,6 +24,7 @@ from dotenv import load_dotenv
 from fastapi import BackgroundTasks, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 from starlette.concurrency import run_in_threadpool
 
 # CrewAI 1.15 annotates threading.Lock as a type. Python 3.11 exposes it as
@@ -63,6 +64,7 @@ sessions: dict = {}   # session_id → {"pdf_paths": [...], "filenames": [...]}
 jobs: dict = {}       # job_id     → {"status", "progress", "results", "error"}
 
 UPLOAD_DIR = Path("uploads")
+FRONTEND_DIST = Path(__file__).resolve().parent.parent / "frontend" / "dist"
 MAX_FILE_SIZE = 50 * 1024 * 1024  # 50 MB
 
 # ---------------------------------------------------------------------------
@@ -366,3 +368,11 @@ async def ask_about_papers(
     except ValueError as exc:
         raise HTTPException(502, str(exc)) from exc
     return AskQuestionResponse(**result)
+
+
+if (FRONTEND_DIST / "index.html").is_file():
+    app.mount(
+        "/",
+        StaticFiles(directory=FRONTEND_DIST, html=True),
+        name="frontend",
+    )

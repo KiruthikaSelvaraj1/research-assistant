@@ -125,6 +125,24 @@ Gemini API model. To use a locally running Ollama model instead, set
 `LLM_MODEL=ollama/<model-name>` (for example, `ollama/llama3.2:3b`) and ensure
 Ollama is installed and the model has been downloaded with `ollama pull`.
 
+### Deploy to Render
+
+The repository includes a Render Blueprint (`render.yaml`) and a multi-stage
+`Dockerfile`. In Render, choose **New → Blueprint**, connect this GitHub repository,
+and deploy the `init` branch. The single web service builds the React frontend and
+serves it from FastAPI.
+
+Before running analysis, add `GEMINI_API_KEY` in the Render service's Environment
+settings using a key from Google AI Studio. Do not put API keys in the repository or
+paste them into chat. `LLM_MODEL` defaults to `gemini/gemini-3.8-flash` in the
+Blueprint and can be changed in Render.
+
+The Blueprint uses Render's free plan. Free services can sleep while idle and have
+limited memory. This app keeps uploaded PDFs and analysis jobs in local storage and
+memory, so a restart, deploy, or sleep can clear an in-progress job; users may need
+to start that analysis again. Analysis also requires the configured hosted LLM
+provider, and model latency or rate limits still apply.
+
 ---
 
 ## Usage
