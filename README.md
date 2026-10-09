@@ -38,7 +38,7 @@ graph TD
     UI -->|POST /analyze| API
     UI -->|GET /progress| API
     UI -->|GET /results| API
-    UI -->|POST /ask/{job_id}| API
+    UI -->|POST ask by job ID| API
 
     API -->|BackgroundTask| CREW
     API -->|Search scholarly metadata| CROSSREF
